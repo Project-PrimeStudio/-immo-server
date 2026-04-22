@@ -1,4 +1,4 @@
-import os, json
+import os, json, requests
 from datetime import timedelta
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
@@ -11,7 +11,8 @@ DATABASE_URL = os.environ.get('DATABASE_URL', 'sqlite:////tmp/immo.db')
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-print(f"==> DB: {DATABASE_URL[:30]}...")
+RAPIDAPI_KEY  = os.environ.get('RAPIDAPI_KEY', '')
+RAPIDAPI_HOST = "zoopla6.p.rapidapi.com"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET', 'immo-secret-2024')
@@ -21,6 +22,8 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db     = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
 jwt    = JWTManager(app)
+
+# ─── MODELS ───
 
 class User(db.Model):
     __tablename__ = 'users'
@@ -58,64 +61,149 @@ class Apartment(db.Model):
             'rooms': self.rooms, 'surface': self.surface, 'description': self.description
         }
 
+# ─── ZOOPLA API ───
+
+def fetch_zoopla(city, listing_type):
+    """Appelle Zoopla6 RapidAPI et retourne une liste d'appartements formatés."""
+    try:
+        if listing_type == 'rent':
+            zoopla_url = f"https://www.zoopla.co.uk/to-rent/property/{city.lower()}/?q={city}&results_sort=newest_listings&search_source=to-rent"
+        else:
+            zoopla_url = f"https://www.zoopla.co.uk/for-sale/property/{city.lower()}/?q={city}&results_sort=newest_listings&search_source=for-sale"
+
+        resp = requests.get(
+            "https://zoopla6.p.rapidapi.com/properties_list.php",
+            params={"url": zoopla_url},
+            headers={
+                "x-rapidapi-key":  RAPIDAPI_KEY,
+                "x-rapidapi-host": RAPIDAPI_HOST,
+                "Content-Type":    "application/json"
+            },
+            timeout=10
+        )
+
+        if resp.status_code != 200:
+            print(f"Zoopla error: {resp.status_code}")
+            return []
+
+        data = resp.json()
+
+        # Extraire les propriétés selon la structure Zoopla6
+        props = []
+        if isinstance(data, list):
+            props = data
+        elif isinstance(data, dict):
+            props = data.get('properties', data.get('listings', data.get('results', [])))
+
+        results = []
+        for i, p in enumerate(props[:20]):  # max 20 annonces
+            try:
+                # Coordonnées
+                lat = float(p.get('latitude',  p.get('lat', 51.5074)))
+                lon = float(p.get('longitude', p.get('lng', -0.1278)))
+
+                # Prix
+                price_raw = p.get('price', p.get('rental_price', '0'))
+                if isinstance(price_raw, str):
+                    price = float(''.join(filter(str.isdigit, price_raw)) or '0')
+                else:
+                    price = float(price_raw or 0)
+
+                # Images
+                imgs = p.get('images', p.get('image_urls', []))
+                if isinstance(imgs, str):
+                    imgs = [imgs]
+                if not imgs:
+                    thumb = p.get('thumbnail_url', p.get('image_url', ''))
+                    imgs = [thumb] if thumb else [
+                        "https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=800"
+                    ]
+
+                # Adresse
+                addr = p.get('displayable_address',
+                       p.get('address',
+                       p.get('street_name', f"{city} Property")))
+
+                # Rooms
+                rooms = int(p.get('num_bedrooms', p.get('bedrooms', 1)) or 1)
+
+                # Agent / propriétaire
+                agent = p.get('agent_name',
+                        p.get('letting_agent',
+                        p.get('agent', 'Agent Immobilier')))
+                phone = p.get('agent_phone',
+                        p.get('phone', '+44 20 0000 0000'))
+
+                results.append({
+                    'id':          i + 1000,
+                    'title':       p.get('title', p.get('property_type', 'Propriété')) + f" - {addr[:40]}",
+                    'type':        listing_type,
+                    'price':       price,
+                    'city':        city,
+                    'address':     addr,
+                    'latitude':    lat,
+                    'longitude':   lon,
+                    'owner_name':  agent,
+                    'phone':       phone,
+                    'images':      imgs[:5],
+                    'rooms':       rooms,
+                    'surface':     float(p.get('floor_area', p.get('size', rooms * 20)) or rooms * 20),
+                    'description': p.get('description', p.get('short_description', 'Voir les détails sur Zoopla.'))[:300]
+                })
+            except Exception as e:
+                print(f"Parse error on property {i}: {e}")
+                continue
+
+        print(f"Zoopla: {len(results)} propriétés récupérées pour {city}")
+        return results
+
+    except Exception as e:
+        print(f"Zoopla fetch error: {e}")
+        return []
+
+# ─── INIT DB ───
+
 def seed_data():
     try:
         if Apartment.query.count() > 0:
             return
+        # Données de secours si Zoopla ne répond pas
         samples = [
-            Apartment(title="Bel appartement 3 pieces - Rivoli", type="rent", price=1800,
-                city="Paris", address="15 Rue de Rivoli, 75001 Paris",
-                latitude=48.8566, longitude=2.3522,
-                owner_name="Jean Dupont", phone="+33612345678",
-                images=json.dumps(["https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=800","https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=800"]),
-                rooms=3, surface=75, description="Magnifique appartement renove au coeur de Paris."),
-            Apartment(title="Studio moderne - Le Marais", type="rent", price=950,
-                city="Paris", address="8 Rue des Archives, 75004 Paris",
-                latitude=48.8578, longitude=2.3560,
-                owner_name="Marie Laurent", phone="+33698765432",
-                images=json.dumps(["https://images.unsplash.com/photo-1554995207-c18c203602cb?w=800","https://images.unsplash.com/photo-1507089947368-19c1da9775ae?w=800"]),
-                rooms=1, surface=32, description="Studio moderne dans le Marais."),
-            Apartment(title="T4 avec terrasse - Montmartre", type="buy", price=650000,
-                city="Paris", address="22 Rue Lepic, 75018 Paris",
-                latitude=48.8850, longitude=2.3340,
-                owner_name="Pierre Martin", phone="+33645678901",
-                images=json.dumps(["https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=800","https://images.unsplash.com/photo-1564013799919-ab600027ffc6?w=800"]),
-                rooms=4, surface=110, description="Superbe T4 terrasse vue Paris."),
-            Apartment(title="F2 lumineux - Part-Dieu", type="rent", price=780,
-                city="Lyon", address="10 Rue Garibaldi, 69003 Lyon",
-                latitude=45.7640, longitude=4.8357,
-                owner_name="Sophie Bernard", phone="+33623456789",
-                images=json.dumps(["https://images.unsplash.com/photo-1536376072261-38c75010e6c9?w=800","https://images.unsplash.com/photo-1560185007-5f0bb1866cab?w=800"]),
-                rooms=2, surface=48, description="F2 lumineux proche Part-Dieu."),
-            Apartment(title="Villa vue mer - Corniche", type="buy", price=890000,
-                city="Marseille", address="5 Bd de la Corniche, 13007 Marseille",
-                latitude=43.2780, longitude=5.3600,
-                owner_name="Luc Moreau", phone="+33634567890",
-                images=json.dumps(["https://images.unsplash.com/photo-1613977257363-707ba9348227?w=800","https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?w=800"]),
-                rooms=6, surface=200, description="Villa piscine vue mer Corniche."),
-            Apartment(title="T3 centre-ville - Nice", type="rent", price=1200,
-                city="Nice", address="3 Avenue Jean Medecin, 06000 Nice",
-                latitude=43.7102, longitude=7.2620,
-                owner_name="Isabelle Petit", phone="+33678901234",
-                images=json.dumps(["https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=800","https://images.unsplash.com/photo-1484154218962-a197022b5858?w=800"]),
-                rooms=3, surface=65, description="T3 lumineux centre Nice."),
+            Apartment(title="Flat in Central London", type="rent", price=2500,
+                city="London", address="Baker Street, London NW1",
+                latitude=51.5227, longitude=-0.1571,
+                owner_name="London Estates", phone="+44 20 7946 0958",
+                images=json.dumps(["https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=800"]),
+                rooms=2, surface=65, description="Beautiful flat in Central London."),
+            Apartment(title="Studio near Tower Bridge", type="rent", price=1800,
+                city="London", address="Tower Bridge Road, London SE1",
+                latitude=51.5055, longitude=-0.0754,
+                owner_name="Thames Properties", phone="+44 20 7946 0123",
+                images=json.dumps(["https://images.unsplash.com/photo-1554995207-c18c203602cb?w=800"]),
+                rooms=1, surface=35, description="Modern studio near Tower Bridge."),
+            Apartment(title="House for Sale - Notting Hill", type="buy", price=950000,
+                city="London", address="Portobello Road, London W11",
+                latitude=51.5151, longitude=-0.2028,
+                owner_name="West London Realty", phone="+44 20 7946 0456",
+                images=json.dumps(["https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=800"]),
+                rooms=4, surface=140, description="Stunning house in Notting Hill."),
         ]
-        for apt in samples:
-            db.session.add(apt)
+        for s in samples:
+            db.session.add(s)
         db.session.commit()
-        print("==> Donnees OK")
     except Exception as e:
-        print(f"==> Seed error: {e}")
+        print(f"Seed error: {e}")
         db.session.rollback()
 
-# Init au demarrage — ne crashe jamais grace au try/except
 try:
     with app.app_context():
         db.create_all()
         seed_data()
         print("==> Demarrage OK")
 except Exception as e:
-    print(f"==> Init error (non fatal): {e}")
+    print(f"==> Init error: {e}")
+
+# ─── ROUTES ───
 
 @app.route('/')
 def index():
@@ -124,10 +212,8 @@ def index():
 @app.route('/api/health')
 def health():
     try:
-        # Recrée les tables si elles n'existent pas (après restart)
         db.create_all()
-        seed_data()
-        return jsonify({'status': 'ok', 'users': User.query.count(), 'apartments': Apartment.query.count()})
+        return jsonify({'status': 'ok', 'users': User.query.count(), 'apartments': Apartment.query.count(), 'zoopla': bool(RAPIDAPI_KEY)})
     except Exception as e:
         return jsonify({'status': 'error', 'detail': str(e)}), 500
 
@@ -170,14 +256,28 @@ def login():
 def get_apartments():
     try:
         db.create_all()
-        city     = request.args.get('city', '')
+        city     = request.args.get('city', 'London')
         apt_type = request.args.get('type', '')
-        query    = Apartment.query
+
+        # Si clé RapidAPI disponible → données Zoopla en temps réel
+        if RAPIDAPI_KEY:
+            if apt_type in ('rent', 'buy'):
+                results = fetch_zoopla(city, apt_type)
+            else:
+                rent = fetch_zoopla(city, 'rent')
+                buy  = fetch_zoopla(city, 'buy')
+                results = rent + buy
+            if results:
+                return jsonify(results)
+
+        # Fallback → données locales SQLite
+        query = Apartment.query
         if city:
             query = query.filter(Apartment.city.ilike(f'%{city}%'))
         if apt_type in ('rent', 'buy'):
             query = query.filter_by(type=apt_type)
         return jsonify([a.to_dict() for a in query.all()])
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
