@@ -8,6 +8,7 @@ from datetime import timedelta
 
 app = Flask(__name__)
 
+# PostgreSQL sur Render (variable d'environnement injectee automatiquement)
 DATABASE_URL = os.environ.get('DATABASE_URL', 'sqlite:///immo.db')
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -21,7 +22,7 @@ db     = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
 jwt    = JWTManager(app)
 
-# ─────────────── MODELS ───────────────
+# ─── MODELS ───
 
 class User(db.Model):
     __tablename__ = 'users'
@@ -63,28 +64,14 @@ class Apartment(db.Model):
             'description': self.description
         }
 
-# ─────────────── INIT DB ───────────────
-# Utilise before_request pour garantir que les tables existent
-# meme apres un redemarrage Render qui efface le SQLite
-
-_db_ready = False
-
-@app.before_request
-def init_db():
-    global _db_ready
-    if not _db_ready:
-        db.create_all()
-        seed_data()
-        _db_ready = True
+# ─── INIT ───
 
 def seed_data():
     if Apartment.query.count() > 0:
         return
     samples = [
-        Apartment(
-            title="Bel appartement 3 pieces renove - Rivoli",
-            type="rent", price=1800, city="Paris",
-            address="15 Rue de Rivoli, 75001 Paris",
+        Apartment(title="Bel appartement 3 pieces - Rivoli", type="rent", price=1800,
+            city="Paris", address="15 Rue de Rivoli, 75001 Paris",
             latitude=48.8566, longitude=2.3522,
             owner_name="Jean Dupont", phone="+33612345678",
             images=json.dumps([
@@ -92,93 +79,72 @@ def seed_data():
                 "https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=800",
                 "https://images.unsplash.com/photo-1484154218962-a197022b5858?w=800",
             ]),
-            rooms=3, surface=75,
-            description="Magnifique appartement au coeur de Paris, entierement renove et lumineux."
-        ),
-        Apartment(
-            title="Studio moderne - Le Marais",
-            type="rent", price=950, city="Paris",
-            address="8 Rue des Archives, 75004 Paris",
+            rooms=3, surface=75, description="Magnifique appartement renove au coeur de Paris."),
+        Apartment(title="Studio moderne - Le Marais", type="rent", price=950,
+            city="Paris", address="8 Rue des Archives, 75004 Paris",
             latitude=48.8578, longitude=2.3560,
             owner_name="Marie Laurent", phone="+33698765432",
             images=json.dumps([
                 "https://images.unsplash.com/photo-1554995207-c18c203602cb?w=800",
                 "https://images.unsplash.com/photo-1507089947368-19c1da9775ae?w=800",
             ]),
-            rooms=1, surface=32,
-            description="Studio moderne dans le quartier du Marais, cuisine ouverte, salle de bain refaite."
-        ),
-        Apartment(
-            title="Grand T4 avec terrasse - Montmartre",
-            type="buy", price=650000, city="Paris",
-            address="22 Rue Lepic, 75018 Paris",
+            rooms=1, surface=32, description="Studio moderne dans le Marais, cuisine ouverte."),
+        Apartment(title="T4 avec terrasse - Montmartre", type="buy", price=650000,
+            city="Paris", address="22 Rue Lepic, 75018 Paris",
             latitude=48.8850, longitude=2.3340,
             owner_name="Pierre Martin", phone="+33645678901",
             images=json.dumps([
                 "https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=800",
                 "https://images.unsplash.com/photo-1564013799919-ab600027ffc6?w=800",
             ]),
-            rooms=4, surface=110,
-            description="Superbe appartement avec terrasse de 20m2 vue imprenable sur Paris."
-        ),
-        Apartment(
-            title="F2 lumineux proche Part-Dieu",
-            type="rent", price=780, city="Lyon",
-            address="10 Rue Garibaldi, 69003 Lyon",
+            rooms=4, surface=110, description="Superbe T4 avec terrasse vue imprenable sur Paris."),
+        Apartment(title="F2 lumineux - Part-Dieu", type="rent", price=780,
+            city="Lyon", address="10 Rue Garibaldi, 69003 Lyon",
             latitude=45.7640, longitude=4.8357,
             owner_name="Sophie Bernard", phone="+33623456789",
             images=json.dumps([
                 "https://images.unsplash.com/photo-1536376072261-38c75010e6c9?w=800",
                 "https://images.unsplash.com/photo-1560185007-5f0bb1866cab?w=800",
             ]),
-            rooms=2, surface=48,
-            description="Appartement F2 tres lumineux proche de la gare Part-Dieu. Balcon vue degagee."
-        ),
-        Apartment(
-            title="Villa vue mer avec piscine",
-            type="buy", price=890000, city="Marseille",
-            address="5 Boulevard de la Corniche, 13007 Marseille",
+            rooms=2, surface=48, description="F2 lumineux proche gare Part-Dieu, balcon."),
+        Apartment(title="Villa vue mer - Corniche", type="buy", price=890000,
+            city="Marseille", address="5 Bd de la Corniche, 13007 Marseille",
             latitude=43.2780, longitude=5.3600,
             owner_name="Luc Moreau", phone="+33634567890",
             images=json.dumps([
                 "https://images.unsplash.com/photo-1613977257363-707ba9348227?w=800",
                 "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?w=800",
             ]),
-            rooms=6, surface=200,
-            description="Villa avec vue mer et piscine privee sur la Corniche. Jardin paysage."
-        ),
-        Apartment(
-            title="T3 centre-ville - Nice",
-            type="rent", price=1200, city="Nice",
-            address="3 Avenue Jean Medecin, 06000 Nice",
+            rooms=6, surface=200, description="Villa piscine vue mer sur la Corniche."),
+        Apartment(title="T3 centre-ville - Nice", type="rent", price=1200,
+            city="Nice", address="3 Avenue Jean Medecin, 06000 Nice",
             latitude=43.7102, longitude=7.2620,
             owner_name="Isabelle Petit", phone="+33678901234",
             images=json.dumps([
                 "https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=800",
                 "https://images.unsplash.com/photo-1484154218962-a197022b5858?w=800",
             ]),
-            rooms=3, surface=65,
-            description="T3 lumineux en plein centre de Nice, 5 minutes de la Promenade des Anglais."
-        ),
+            rooms=3, surface=65, description="T3 lumineux centre Nice, proche Promenade."),
     ]
     for apt in samples:
         db.session.add(apt)
     db.session.commit()
-    print("Donnees inserees avec succes")
+    print("OK: donnees inserees")
 
-# ─────────────── ROUTES ───────────────
+# ─── ROUTES ───
 
 @app.route('/')
 def index():
-    return jsonify({'message': 'ImmoLocate API en ligne'}), 200
+    return jsonify({'message': 'ImmoLocate API OK'}), 200
 
 @app.route('/api/health')
 def health():
-    return jsonify({
-        'status': 'ok',
-        'users': User.query.count(),
-        'apartments': Apartment.query.count()
-    })
+    try:
+        u = User.query.count()
+        a = Apartment.query.count()
+        return jsonify({'status': 'ok', 'users': u, 'apartments': a})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/register', methods=['POST'])
 def register():
@@ -220,6 +186,12 @@ def get_apartments():
 @app.route('/api/apartments/<int:apt_id>', methods=['GET'])
 def get_apartment(apt_id):
     return jsonify(Apartment.query.get_or_404(apt_id).to_dict())
+
+# ─── LANCEMENT ───
+
+with app.app_context():
+    db.create_all()
+    seed_data()
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
